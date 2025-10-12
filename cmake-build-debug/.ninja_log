@@ -1,0 +1,7 @@
+# ninja log v5
+2	205	7819383056008045	build.ninja	af56343982083a75
+0	61	7819383057794029	CMakeFiles/bit_torrent.dir/peer.cpp.obj	e2a6b39a4c0faae5
+4	615	7819383063316741	CMakeFiles/bit_torrent.dir/main.cpp.obj	881eb1b4a4f47485
+617	810	7819383065257175	bit_torrent.exe	ffbc4ce618ec8d80
+4	748	7819385387217888	CMakeFiles/bit_torrent.dir/main.cpp.obj	881eb1b4a4f47485
+749	875	7819385388449165	bit_torrent.exe	ffbc4ce618ec8d80

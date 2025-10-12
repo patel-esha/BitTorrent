@@ -1,0 +1,3 @@
+C:/Users/Gabriel/CLionProjects/bit-torrent/cmake-build-debug/CMakeFiles/bit_torrent.dir
+C:/Users/Gabriel/CLionProjects/bit-torrent/cmake-build-debug/CMakeFiles/edit_cache.dir
+C:/Users/Gabriel/CLionProjects/bit-torrent/cmake-build-debug/CMakeFiles/rebuild_cache.dir
