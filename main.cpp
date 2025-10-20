@@ -1,12 +1,9 @@
 #include <iostream>
 #include <fstream>
 #include <string>
-#include <sstream>
+#include "peer.h"
 
-void init(){
-
-}
-int main() {
+int main(int argc, char* argv[]) {
     std::ifstream file("Common.cfg");
     if (!file.is_open()) {
         std::cerr << "Error: Could not open Common.cfg" << std::endl;
@@ -53,6 +50,7 @@ int main() {
     std::cout << "PieceSize: " << PieceSize << "\n";
     std::cout << "Num of Pieces: " << FileSize/PieceSize << "\n";
 
-
-    return 0;
+    if (argc != 2) return 1;
+    Peer p(std::stoi(argv[1]));
+    p.start();
 }

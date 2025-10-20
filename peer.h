@@ -1,15 +1,25 @@
-//
-// Created by Gabriel on 10/11/2025.
-//
+#pragma once
+#include <string>
+#include <vector>
+#include <thread>
 
-#ifndef BIT_TORRENT_PEER_H
-#define BIT_TORRENT_PEER_H
-
-
-class peer {
-public:
+struct PeerInfo {
     int id;
+    std::string hostName;
+    int port;
+    bool hasFile;
 };
 
+class Peer {
+public:
+    explicit Peer(int peerId);
+    void start();
 
-#endif //BIT_TORRENT_PEER_H
+private:
+    int peerId;
+    std::vector<PeerInfo> peers;
+
+    int listenForPeers();
+    int connectToPeers();
+    void handleConnection(int socket);
+};
