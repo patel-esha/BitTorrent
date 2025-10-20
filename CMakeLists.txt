@@ -6,4 +6,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
 
 add_executable(bit_torrent main.cpp peer.cpp peer.h)
-target_link_libraries(client Threads::Threads)
+target_link_libraries(bit_torrent Threads::Threads)
