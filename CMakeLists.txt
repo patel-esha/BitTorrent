@@ -5,10 +5,5 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
 
-# server executable and link with libraries
-add_executable(server server.cpp)
-target_link_libraries(server Threads::Threads)
-
-# client executable and link with libraries
-add_executable(client client.cpp)
+add_executable(bit_torrent main.cpp peer.cpp peer.h)
 target_link_libraries(client Threads::Threads)
