@@ -7,13 +7,16 @@
 #include <csignal>
 #include <atomic>
 #include <arpa/inet.h>
+#include <fstream>
 #include "peer.h"
 
 std::atomic<bool> running{true};
 constexpr int PORT = 8000;
 constexpr int BUFFER_SIZE = 1024;
 
-Peer::Peer(int id) : peerId(id) {}
+Peer::Peer(int id) : peerId(id) {
+    loadPeerInfo("PeerInfo.cfg");
+}
 
 void signalHandler(int) {
     running = false;
@@ -23,6 +26,36 @@ void Peer::start() {
     std::thread listener(&Peer::listenForPeers, this);
     connectToPeers();
     listener.join();
+}
+
+int Peer::loadPeerInfo(const std::string& fileName) {
+    std::ifstream file(fileName);
+    if (!file.is_open()) {
+        std::cerr << "Error: could not open " << fileName << std::endl;
+        return 1;
+    }
+
+    peers.clear();
+    int id = 0;
+    int port = 0;
+    bool hasFile = false;
+    std::string host;
+
+    while (file >> id >> host >> port >> hasFile) {
+        PeerInfo info;
+        info.id = id;
+        info.hostName = "localhost";
+        info.port = port;
+        info.hasFile = hasFile;
+        peers.push_back(info);
+
+        if (id == this->peerId) {
+            self = info;
+        }
+    }
+
+    file.close();
+    return 0;
 }
 
 int Peer::listenForPeers() {

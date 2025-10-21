@@ -4,12 +4,18 @@
 #include "peer.h"
 
 int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <peerID>" << std::endl;
+        return 1;
+    }
+
+    int peerID = std::stoi(argv[1]);
+
     std::ifstream file("Common.cfg");
     if (!file.is_open()) {
         std::cerr << "Error: Could not open Common.cfg" << std::endl;
         return 1;
     }
-
 
     int NumberOfPreferredNeighbors = 0;
     int UnchokingInterval = 0;
@@ -50,7 +56,10 @@ int main(int argc, char* argv[]) {
     std::cout << "PieceSize: " << PieceSize << "\n";
     std::cout << "Num of Pieces: " << FileSize/PieceSize << "\n";
 
-    if (argc != 2) return 1;
-    Peer p(std::stoi(argv[1]));
-    p.start();
+    std::cout << "Common.cfg parsed successfully" << std::endl;
+
+    Peer peer(peerID);
+    peer.start();
+
+    return 0;
 }

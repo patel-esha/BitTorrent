@@ -18,7 +18,8 @@ public:
 private:
     int peerId;
     std::vector<PeerInfo> peers;
-
+    PeerInfo self;
+    int loadPeerInfo(const std::string& fileName);
     int listenForPeers();
     int connectToPeers();
     void handleConnection(int socket);
