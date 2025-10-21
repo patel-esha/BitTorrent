@@ -11,7 +11,6 @@
 #include "peer.h"
 
 std::atomic<bool> running{true};
-constexpr int PORT = 8000;
 constexpr int BUFFER_SIZE = 1024;
 
 Peer::Peer(int id) : peerId(id) {
@@ -68,7 +67,7 @@ int Peer::listenForPeers() {
     sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(PORT);
+    serverAddr.sin_port = htons(self.port);
 
     if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
         std::cerr << "Bind failed.\n";
@@ -80,7 +79,7 @@ int Peer::listenForPeers() {
         return 1;
     }
 
-    std::cout << "Server listening on port " << PORT << "...\n";
+    std::cout << "Server listening on port " << self.port << "...\n";
 
     std::vector<std::thread> threads;
     int clientNum = 1;
@@ -115,7 +114,7 @@ int Peer::connectToPeers() {
 
             sockaddr_in serverAddr{};
             serverAddr.sin_family = AF_INET;
-            serverAddr.sin_port = htons(PORT);
+            serverAddr.sin_port = htons(self.port);
             inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
