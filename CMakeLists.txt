@@ -1,9 +1,11 @@
-cmake_minimum_required(VERSION 3.27)
+cmake_minimum_required(VERSION 3.22)
 project(bit_torrent)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
 
-add_executable(peerProcess main.cpp peer.cpp peer.h)
+add_executable(peerProcess main.cpp peer.cpp peer.h
+        Logger.cpp
+        Logger.h)
 target_link_libraries(peerProcess Threads::Threads)
