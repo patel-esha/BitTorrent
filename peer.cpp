@@ -13,8 +13,12 @@
 std::atomic<bool> running{true};
 constexpr int BUFFER_SIZE = 1024;
 
-Peer::Peer(int id) : peerId(id) {
-    loadPeerInfo("PeerInfo.cfg");
+Peer::Peer(int id) : peerId(id), logger(*this) {
+    loadPeerInfo("../PeerInfo.cfg");
+}
+
+int Peer::getPeerId() {
+    return peerId;
 }
 
 void signalHandler(int) {

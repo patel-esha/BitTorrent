@@ -12,7 +12,7 @@ int main(int argc, char* argv[]) {
 
     int peerID = std::stoi(argv[1]);
 
-    std::ifstream file("Common.cfg");
+    std::ifstream file("../Common.cfg");
     if (!file.is_open()) {
         std::cerr << "Error: Could not open Common.cfg" << std::endl;
         return 1;
@@ -58,49 +58,15 @@ int main(int argc, char* argv[]) {
     std::cout << "Num of Pieces: " << FileSize/PieceSize << "\n";
 
     std::cout << "Common.cfg parsed successfully" << std::endl;
-
+""
     //logging Examples
 
-    // Create logger for this peer
-    Logger logger(peerID);
-
-    // Example 1: Log TCP connection made
-    logger.logTCPConnectionMade(1002);
-
-    // Example 2: Log TCP connection received
-    logger.logTCPConnectionReceived(1003);
-
-    // Example 3: Log change of preferred neighbors
-    std::vector<int> preferredNeighbors = {1002, 1004, 1005};
-    logger.logPreferredNeighborsChange(preferredNeighbors);
-
-    // Example 4: Log optimistically unchoked neighbor
-    logger.logOptimisticallyUnchokedNeighbor(1006);
-
-    // Example 5: Log unchoking
-    logger.logUnchoking(1002);
-
-    // Example 6: Log choking
-    logger.logChoking(1003);
-
-    // Example 7: Log receiving 'have' message
-    logger.logReceivingHave(1002, 5);
-
-    // Example 8: Log receiving 'interested' message
-    logger.logReceivingInterested(1004);
-
-    // Example 9: Log receiving 'not interested' message
-    logger.logReceivingNotInterested(1005);
-
-    // Example 10: Log downloading a piece
-    logger.logDownloadingPiece(1002, 10, 15);
-
-    // Example 11: Log download complete
-    logger.logDownloadComplete();
-
-
+    int peer2 = 1008;
     Peer peer(peerID);
     peer.start();
+    peer.logger.logTCPConnectionMade(peer2);
+    peer.logger.logChoking(peer2);
+    peer.logger.logUnchoking(peer2);
 
 
     return 0;

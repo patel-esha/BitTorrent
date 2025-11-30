@@ -9,12 +9,15 @@
 #include <mutex>
 #include <vector>
 
+class Peer;
+
 class Logger {
 private:
     std::string logFileName;
     std::ofstream logFile;
     std::mutex logMutex;
     int peerID;
+    Peer& owner_peer_;
 
     // Helper method to get current timestamp in format: MM/DD/YYYY HH:MM:SS AM/PM
     std::string getCurrentTimestamp();
@@ -24,7 +27,8 @@ private:
 
 public:
     // Constructor: Opens log file for the given peer ID
-    Logger(int peerID);
+    Logger(Peer& owner);
+
 
     // Destructor: Closes log file
     ~Logger();

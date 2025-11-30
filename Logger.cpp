@@ -4,8 +4,13 @@
 #include <iomanip>
 #include <ctime>
 
+#include "peer.h"
+
+
 // Constructor
-Logger::Logger(int peerID) : peerID(peerID) {
+Logger::Logger(Peer& owner) : owner_peer_(owner) {
+    int peerID_val = owner_peer_.getPeerId();
+    this->peerID = peerID_val;
     logFileName = "log_peer_" + std::to_string(peerID) + ".log";
     logFile.open(logFileName, std::ios::out | std::ios::app);
 
@@ -13,6 +18,8 @@ Logger::Logger(int peerID) : peerID(peerID) {
         std::cerr << "Error: Could not open log file: " << logFileName << std::endl;
     }
 }
+
+
 
 // Destructor
 Logger::~Logger() {

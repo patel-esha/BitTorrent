@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include "Logger.h"
 #include <thread>
 
 struct PeerInfo {
@@ -14,13 +15,17 @@ class Peer {
 public:
     explicit Peer(int peerId);
     void start();
+    int getPeerId();
+    Logger logger;
 
 private:
     int peerId;
     std::vector<PeerInfo> peers;
     PeerInfo self;
+
     int loadPeerInfo(const std::string& fileName);
     int listenForPeers();
     int connectToPeers();
     void handleConnection(int socket);
+
 };
