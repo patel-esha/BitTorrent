@@ -18,7 +18,6 @@ Peer::Peer(int id) : peerId(id), logger(*this) {
     loadPeerInfo("../PeerInfo.cfg");
 
     int numPieces = (size + pieceSize - 1) / pieceSize;
-    std::cout << "Peer " << peerId << " has " << numPieces << " pieces." << std::endl;
     bitfield.resize(numPieces);
     if (self.hasFile) {
         std::fill(bitfield.begin(), bitfield.end(), true);
@@ -29,10 +28,6 @@ Peer::Peer(int id) : peerId(id), logger(*this) {
 
 int Peer::getPeerId() {
     return peerId;
-}
-
-void signalHandler(int) {
-    running = false;
 }
 
 void Peer::start() {
@@ -97,27 +92,27 @@ int Peer::listenForPeers() {
         return 1;
     }
 
+    int opt = 1;
+    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
     sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     serverAddr.sin_port = htons(self.port);
 
     if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        std::cerr << "Bind failed.\n";
+        perror("bind");
         return 1;
     }
 
     if (listen(serverSocket, 5) < 0) {
-        std::cerr << "Listen failed.\n";
+        perror("listen");
         return 1;
     }
 
-    std::cout << "Server listening on port " << self.port << "...\n";
+    std::cout << "Peer " << peerId << " listening on port " << self.port << "...\n";
 
     std::vector<std::thread> threads;
-    int clientNum = 1;
-
-    signal(SIGINT, signalHandler);
 
     while (running) {
         sockaddr_in clientAddr{};
@@ -147,14 +142,19 @@ int Peer::connectToPeers() {
 
             sockaddr_in serverAddr{};
             serverAddr.sin_family = AF_INET;
-            serverAddr.sin_port = htons(self.port);
-            inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
+            serverAddr.sin_port = htons(peerInfo.port);
+            inet_pton(AF_INET, "192.168.0.7", &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
                 std::cerr << "Connection failed.\n";
                 return 1;
             }
 
+            // send handshake
+            auto handshake = createHandshake();
+            send(sock, handshake.data(), handshake.size(), 0);
+
+            // handle connection in a new thread
             std::thread(&Peer::handleConnection, this, sock).detach();
         }
     }
@@ -162,27 +162,79 @@ int Peer::connectToPeers() {
 }
 
 void Peer::handleConnection(int socket) {
-    char buffer[BUFFER_SIZE];
+    int remotePeerID = -1;
 
-    //std::cout << "Client " << clientNum << " connected!" << std::endl;
-
-    while (true) {
-        memset(buffer, 0, BUFFER_SIZE);
-        ssize_t bytesRead = recv(socket, buffer, BUFFER_SIZE - 1, 0);
-        if (bytesRead <= 0) {
-            //std::cout << "Client " << clientNum << " disconnected.\n";
-            break;
-        }
-
-        //std::cout << "Received from client " << clientNum << ": " << buffer << std::endl;
-
-        // convert to uppercase
-        for (int i = 0; i < bytesRead; ++i)
-            buffer[i] = std::toupper(buffer[i]);
-
-        // send back
-        send(socket, buffer, bytesRead, 0);
+    // receive handshake from remote peer
+    if (!receiveHandshake(socket, remotePeerID)) {
+        close(socket);
+        return;
     }
 
-    close(socket);
+    peerSockets[remotePeerID] = socket;
+
+    std::cout << "Peer " << peerId << " connected with Peer " << remotePeerID << std::endl;
+
+    // send handshake back
+    auto handshake = createHandshake();
+    send(socket, handshake.data(), handshake.size(), 0);
+
+    // send bitfield
+    sendBitfield(socket);
+
+    /* enter message loop
+    while (running) {
+        Message msg;
+        if (!receiveMessage(socket, msg)) break;
+
+        handleMessage(remotePeerID, msg);
+    } */
+
+    // cleanup
+    //peerSockets.erase(remotePeerID);
+    //close(socket);
+}
+
+std::vector<unsigned char> Peer::createHandshake() {
+    std::vector<unsigned char> msg(32,0);
+
+    const char* header = "P2PFILESHARINGPROJ";
+    std::memcpy(msg.data(), header, 18);
+
+    int32_t idN = htonl(peerId);
+    memcpy(msg.data() + 28, &idN, 4);
+
+    return msg;
+}
+
+bool Peer::receiveHandshake(int socket, int &remotePeerID) {
+    unsigned char hs[32];
+
+    ssize_t bytes = recv(socket, hs, 32, MSG_WAITALL);
+    if (bytes != 32)
+        return false;
+
+    int32_t id;
+    memcpy(&id, hs + 28, sizeof(id));
+    remotePeerID = ntohl(id);
+    std::cout << "Peer " << peerId << " received handshake from Peer " << remotePeerID << std::endl;
+
+    return true;
+}
+
+void Peer::sendBitfield(int socket) {
+    // Format: length (4 bytes), type = 5, payload = bitfield
+    uint32_t length = htonl(1 + bitfield.size());
+    unsigned char type = 5;  // bitfield message type
+
+    std::vector<unsigned char> msg(4 + 1 + bitfield.size());
+    memcpy(msg.data(), &length, 4);
+    msg[4] = type;
+
+    // convert vector<bool> to bytes
+    for (size_t i = 0; i < bitfield.size(); i++)
+        msg[5 + i] = bitfield[i] ? 1 : 0;
+
+    send(socket, msg.data(), msg.size(), 0);
+
+    std::cout << "Peer " << peerId << " sent bitfield" << std::endl;
 }
