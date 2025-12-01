@@ -181,13 +181,13 @@ void Peer::handleConnection(int socket) {
     // send bitfield
     sendBitfield(socket);
 
-    /* enter message loop
+    //enter message loop
     while (running) {
         Message msg;
         if (!receiveMessage(socket, msg)) break;
 
         handleMessage(remotePeerID, msg);
-    } */
+    }
 
     // cleanup
     //peerSockets.erase(remotePeerID);
@@ -238,3 +238,104 @@ void Peer::sendBitfield(int socket) {
 
     std::cout << "Peer " << peerId << " sent bitfield" << std::endl;
 }
+
+bool Peer::receiveMessage(int socket, Message &msg) {
+    // Format: length (4 bytes), type = 5, payload = bitfield
+    uint32_t lenNet;
+    ssize_t bytes = recv(socket, &lenNet, 4, MSG_WAITALL);
+    if (bytes <= 0) return false;
+
+    msg.length = ntohl(lenNet);
+
+    // read type
+    bytes = recv(socket, &msg.type, 1, MSG_WAITALL);
+    if (bytes <= 0) return false;
+
+    int payloadLen = msg.length - 1;
+
+    msg.payload.resize(payloadLen);
+    if (payloadLen > 0) {
+        bytes = recv(socket, msg.payload.data(), payloadLen, MSG_WAITALL);
+        if (bytes <= 0) return false;
+    }
+}
+
+bool Peer::sendMessage(int socket, unsigned char type, const std::vector<unsigned char> &payload) {
+    uint32_t length = 1 + payload.size();
+    uint32_t lenNet = htonl(length);
+
+    // full message buffer
+    std::vector<unsigned char> buf(4 + length);
+    memcpy(buf.data(), &lenNet, 4);
+    buf[4] = type;
+
+    memcpy(buf.data() + 5, payload.data(), payload.size());
+
+    ssize_t sent = send(socket, buf.data(), buf.size(), 0);
+    return sent == static_cast<ssize_t>(buf.size());
+}
+
+void Peer::handleMessage(int remoteID, const Message &msg) {
+    switch (msg.type) {
+        case 0: handleChoke(remoteID); break;
+        case 1:  handleUnchoke(remoteID); break;
+        case 2:  handleInterested(remoteID); break;
+        case 3:  handleNotInterested(remoteID); break;
+        case 4:  handleHave(remoteID, msg.payload); break;
+        case 5:  handleBitfield(remoteID, msg.payload); break;
+        case 6:  handleRequest(remoteID, msg.payload); break;
+        case 7:  handlePiece(remoteID, msg.payload); break;
+        default:
+            std::cerr << "Unknown message type " << (int)msg.type << "\n";
+    }
+}
+
+void Peer::handleInterested(int remoteID) {
+    neighborStates[remoteID].peerInterested = true;
+    logger.logReceivingInterested(remoteID);
+}
+
+void Peer::handleNotInterested(int remoteID) {
+    neighborStates[remoteID].peerInterested = false;
+    logger.logReceivingNotInterested(remoteID);
+}
+
+void Peer::handleChoke(int remoteID) {
+    neighborStates[remoteID].peerChoking = true;
+    logger.logChoking(remoteID);
+}
+
+void Peer::handleUnchoke(int remoteID) {
+    neighborStates[remoteID].peerChoking = false;
+    logger.logUnchoking(remoteID);
+
+    // TODO: implement this function
+    //requestNextPiece(remoteID);
+}
+
+void Peer::handleRequest(int remoteID, const std::vector<unsigned char>& payload) {
+    int32_t idx;
+    memcpy(&idx, payload.data(), 4);
+    idx = ntohl(idx);
+
+    // TODO: implement the following functions
+    //logger.LogRequestingPiece(remoteID, idx);
+    //sendPiece(remoteID, idx);
+}
+
+void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) {
+    int32_t idx;
+    memcpy(&idx, payload.data(), 4);
+    idx = ntohl(idx);
+
+    std::vector<unsigned char> data(payload.begin()+4, payload.end());
+
+    // TODO: implement these functions
+    //savePiece(idx, data) // write to file or memory
+    //updateBitfield(idx)
+    //broadcaseHave(idx);
+    //logger.logDownloadingPiece(remoteID, idx, countPiecesOwned());
+    //requestNextPiece(remoteID);
+}
+
+
