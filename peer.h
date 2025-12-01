@@ -18,6 +18,22 @@ struct Handshake {
     int32_t peerID;      // network byte order
 };
 
+struct Message {
+    uint32_t length;        // includes type byte + payload
+    unsigned char type;     // message ID
+    std::vector<unsigned char> payload;
+};
+
+struct NeighborState {
+    bool amChoking = true;
+    bool amInterested = false;
+    bool peerChoking = true;
+    bool peerInterested = false;
+    double downloadRate = 0.0; // bytes/sec provided
+    long bytesDownloaded = 0;
+    long bytesUploaded = 0;
+};
+
 class Peer {
 public:
     explicit Peer(int peerId);
@@ -38,6 +54,7 @@ private:
     std::vector<bool> bitfield;
     std::unordered_map<int, std::vector<bool>> neighborBitfields;
     std::unordered_map<int, int> peerSockets;
+    std::unordered_map<int, NeighborState> neighborStates;
 
     int loadPeerInfo(const std::string& fileName);
     int loadCommonConfig(const std::string& fileName);
@@ -47,4 +64,16 @@ private:
     std::vector<unsigned char> createHandshake();
     void sendBitfield(int socket);
     bool receiveHandshake(int socket, int &remotePeerID);
+    bool receiveMessage(int socket, Message &msg);
+    bool sendMessage(int socket, unsigned char type, const std::vector<unsigned char>& payload);
+    void handleMessage(int remoteID, const Message &msg);
+    void handleInterested(int remoteID);
+    void handleNotInterested(int remoteID);
+    void handleChoke(int remoteID);
+    void handleUnchoke(int remoteID);
+    void handleRequest(int remoteID, const std::vector<unsigned char>& payload);
+    void handlePiece(int remoteID, const std::vector<unsigned char>& payload);
+    void handleHave(int remoteID, const std::vector<unsigned char>& payload);
+    void handleBitfield(int remoteID, const std::vector<unsigned char>& payload);
+
 };
