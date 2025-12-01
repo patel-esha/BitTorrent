@@ -143,6 +143,7 @@ int Peer::connectToPeers() {
             sockaddr_in serverAddr{};
             serverAddr.sin_family = AF_INET;
             serverAddr.sin_port = htons(peerInfo.port);
+            // change to local IP for local testing
             inet_pton(AF_INET, "192.168.0.7", &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
