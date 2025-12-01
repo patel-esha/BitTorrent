@@ -14,7 +14,17 @@ std::atomic<bool> running{true};
 constexpr int BUFFER_SIZE = 1024;
 
 Peer::Peer(int id) : peerId(id), logger(*this) {
+    loadCommonConfig("../Common.cfg");
     loadPeerInfo("../PeerInfo.cfg");
+
+    int numPieces = (size + pieceSize - 1) / pieceSize;
+    std::cout << "Peer " << peerId << " has " << numPieces << " pieces." << std::endl;
+    bitfield.resize(numPieces);
+    if (self.hasFile) {
+        std::fill(bitfield.begin(), bitfield.end(), true);
+    } else {
+        std::fill(bitfield.begin(), bitfield.end(), false);
+    }
 }
 
 int Peer::getPeerId() {
@@ -61,6 +71,25 @@ int Peer::loadPeerInfo(const std::string& fileName) {
     return 0;
 }
 
+int Peer::loadCommonConfig(const std::string& fileName) {
+    std::ifstream file(fileName);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open Common.cfg" << std::endl;
+        return 1;
+    }
+
+    std::string key;
+    file >> key >> numPreferredNeighbors;
+    file >> key >> unchokingInterval;
+    file >> key >> optimisticUnchokingInterval;
+    file >> key >> name;
+    file >> key >> size;
+    file >> key >> pieceSize;
+
+    file.close();
+    return 0;
+}
+
 int Peer::listenForPeers() {
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket == -1) {
@@ -96,7 +125,7 @@ int Peer::listenForPeers() {
         int clientSocket = accept(serverSocket, (sockaddr*)&clientAddr, &clientSize);
 
         if (clientSocket >= 0) {
-            std::thread(&Peer::handleConnection, this, clientNum++);
+            threads.emplace_back(&Peer::handleConnection, this, clientSocket);
         }
     }
 
