@@ -258,6 +258,8 @@ bool Peer::receiveMessage(int socket, Message &msg) {
         bytes = recv(socket, msg.payload.data(), payloadLen, MSG_WAITALL);
         if (bytes <= 0) return false;
     }
+
+    return true;
 }
 
 bool Peer::sendMessage(int socket, unsigned char type, const std::vector<unsigned char> &payload) {
@@ -338,4 +340,8 @@ void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) 
     //requestNextPiece(remoteID);
 }
 
+void Peer::handleHave(int remoteID, const std::vector<unsigned char> &payload) {
+}
 
+void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payload) {
+}
