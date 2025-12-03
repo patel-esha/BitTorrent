@@ -308,12 +308,15 @@ void Peer::handleChoke(int remoteID) {
     logger.logChoking(remoteID);
 }
 
+//this function was pretty much done idk why there was a TODO here but mby im missing something
 void Peer::handleUnchoke(int remoteID) {
     neighborStates[remoteID].peerChoking = false;
     logger.logUnchoking(remoteID);
 
-    // TODO: implement this function
-    //requestNextPiece(remoteID);
+    std::cout << "Peer " << peerId << " was unchoked by peer " << remoteID << std::endl;
+
+    //now we can request a piece
+    requestNextPiece(remoteID);
 }
 
 void Peer::handleRequest(int remoteID, const std::vector<unsigned char>& payload) {
@@ -321,28 +324,288 @@ void Peer::handleRequest(int remoteID, const std::vector<unsigned char>& payload
     memcpy(&idx, payload.data(), 4);
     idx = ntohl(idx);
 
-    // TODO: implement the following functions
-    //logger.LogRequestingPiece(remoteID, idx);
-    //sendPiece(remoteID, idx);
+    std::cout << "Peer " << peerId << " received REQUEST for piece " << idx << " from peer " << remoteID << std::endl;
+
+    // chewck if this peer is unchoked
+    if (neighborStates[remoteID].amChoking) {
+        std::cout << "Peer " << peerId << " ignoring request from choked peer "<< remoteID << std::endl;
+        return;
+    }
+
+    sendPiece(remoteID, idx);
 }
 
 void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) {
     int32_t idx;
     memcpy(&idx, payload.data(), 4);
     idx = ntohl(idx);
+    //same as before
 
-    std::vector<unsigned char> data(payload.begin()+4, payload.end());
+    std::vector<unsigned char> data(payload.begin() + 4, payload.end());
 
-    // TODO: implement these functions
-    //savePiece(idx, data) // write to file or memory
-    //updateBitfield(idx)
-    //broadcaseHave(idx);
-    //logger.logDownloadingPiece(remoteID, idx, countPiecesOwned());
-    //requestNextPiece(remoteID);
+    std::cout << "Peer " << peerId << " received piece " << idx
+              << " from peer " << remoteID << " (" << data.size()
+              << " bytes)" << std::endl;
+
+
+    savePiece(idx, data);
+
+
+    bitfield[idx] = true;
+
+    // Remove from requested set
+    {
+        std::lock_guard<std::mutex> lock(requestedPiecesMutex);
+        requestedPieces.erase(idx);
+    }
+
+
+    logger.logDownloadingPiece(remoteID, idx, countPiecesOwned());
+
+    // Broadcast HAVE message to all
+    broadcastHave(idx);
+
+            // Check if download is complete
+    if (hasCompletedDownload())
+    {
+        logger.logDownloadComplete();
+        std::cout << "Peer " << peerId << " has completed download!" << std::endl;
+        // TODO: Check if ALL peers are done (termination condition)
+    }
+
+    // Request next piece from this peer
+    // CHECK FOR:
+    requestNextPiece(remoteID);
 }
 
 void Peer::handleHave(int remoteID, const std::vector<unsigned char> &payload) {
+    int32_t pieceIndex;
+    memcpy(&pieceIndex, payload.data(), 4);
+    pieceIndex = ntohl(pieceIndex);
+
+    logger.logReceivingHave(remoteID, pieceIndex);
+
+    // Update their bitfield
+    if (neighborBitfields.count(remoteID)) {
+        neighborBitfields[remoteID][pieceIndex] = true;}
+
+    // If we need this piece, send interested
+    if (!bitfield[pieceIndex]) {
+        sendMessage(peerSockets[remoteID], 2, {}); // interested
+    }
+}
+void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payload) {
+    // Store their bitfield
+    std::vector<bool> remoteBitfield(bitfield.size());
+    for (size_t i = 0; i < payload.size() && i < bitfield.size(); i++) {
+        remoteBitfield[i] = (payload[i] == 1);
+    }
+    neighborBitfields[remoteID] = remoteBitfield;
+
+
+    // Check if they have anything we need
+    bool interested = false;
+    for (size_t i = 0; i < bitfield.size(); i++) {
+        if (!bitfield[i] && remoteBitfield[i]) {
+            interested = true;
+            break;
+        }
+    }
+
+    // Send interested/not interested
+    unsigned char msgType = interested ? 2 : 3;
+    sendMessage(peerSockets[remoteID], msgType, {});
+}
+std::string Peer::getPieceFilePath(int pieceIndex) {
+    std::string dirPath = "peer_" + std::to_string(peerId);
+    return dirPath + "/" + name;  // name is from Common.cfg
+}
+void Peer::savePiece(int pieceIndex, const std::vector<unsigned char>& data) {
+    std::string filePath = getPieceFilePath(pieceIndex);
+
+    // Open file in binary mode for read/write, creates it if doesn't exist
+    std::fstream file(filePath, std::ios::binary | std::ios::in | std::ios::out);
+    if (!file.is_open()) {
+        // File doesn't exist, create it
+        file.open(filePath, std::ios::binary | std::ios::out);
+        if (!file.is_open()) {
+            std::cerr << "Error: Cannot create file " << filePath << std::endl;
+            return;
+        }
+        file.close();
+        file.open(filePath, std::ios::binary | std::ios::in | std::ios::out);
+    }
+
+    // Calculate offset in file
+    std::streampos offset = static_cast<std::streampos>(pieceIndex) * pieceSize;
+
+    // Seek to position and write
+    file.seekp(offset);
+    file.write(reinterpret_cast<const char*>(data.data()), data.size());
+    file.close();
+
+    std::cout << "Peer " << peerId << " saved piece " << pieceIndex
+              << " (" << data.size() << " bytes)" << std::endl;
+}
+std::vector<unsigned char> Peer::loadPiece(int pieceIndex) {
+    std::string filePath = getPieceFilePath(pieceIndex);
+
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open file " << filePath << std::endl;
+        return {};
+    }
+
+    // Calculate offset and size
+    std::streampos offset = static_cast<std::streampos>(pieceIndex) * pieceSize;
+
+    // Calculate piece size (last piece might be smaller)
+    int numPieces = (size + pieceSize - 1) / pieceSize;
+    int currentPieceSize = pieceSize;
+    if (pieceIndex == numPieces - 1) {
+        // Last piece
+        currentPieceSize = size - (pieceIndex * pieceSize);
+    }
+
+    // Seek and read
+    file.seekg(offset);
+    std::vector<unsigned char> data(currentPieceSize);
+    file.read(reinterpret_cast<char*>(data.data()), currentPieceSize);
+    file.close();
+
+    std::cout << "Peer " << peerId << " loaded piece " << pieceIndex
+              << " (" << data.size() << " bytes)" << std::endl;
+
+    return data;
+}
+int Peer::selectRandomPiece(int remoteID) {
+    //check if we have neighbor bitfield
+    if (neighborBitfields.find(remoteID) == neighborBitfields.end()) {
+        return -1;  // Don't know what they have
+    }
+
+    std::vector<bool>& remoteBitfield = neighborBitfields[remoteID];
+
+    // Find pieces that:
+    // 1.remote peer has
+    // 2.We dont have
+    // 3.we havent requested yet
+    std::vector<int> availablePieces;
+
+    std::lock_guard<std::mutex> lock(requestedPiecesMutex);
+
+    for (size_t i = 0; i < bitfield.size(); i++) {
+        if (!bitfield[i] &&                           // We dont have it
+            remoteBitfield[i] &&                      // They have it
+            requestedPieces.find(i) == requestedPieces.end()) // Not requested
+        {
+            availablePieces.push_back(i);
+        }
+    }
+
+    if (availablePieces.empty()) {
+        return -1;  // No pieces available
+    }
+
+    // Random selection
+    int randomIndex = rand() % availablePieces.size();
+    int selectedPiece = availablePieces[randomIndex];
+
+    // Mark as requested
+    requestedPieces.insert(selectedPiece);
+
+    std::cout << "Peer " << peerId << " selected piece " << selectedPiece
+              << " from peer " << remoteID << std::endl;
+
+    return selectedPiece;
 }
 
-void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payload) {
+int Peer::countPiecesOwned() {
+    int count = 0;
+    for (bool hasPiece : bitfield) {
+        if (hasPiece) count++;
+    }
+    return count;
+}
+
+bool Peer::hasCompletedDownload() {
+    for (bool hasPiece : bitfield) {
+        if (!hasPiece) return false;
+    }
+    return true;
+}
+void Peer::requestNextPiece(int remoteID) {
+    // Check if we're choked
+    if (neighborStates[remoteID].peerChoking) {
+        std::cout << "Peer " << peerId << " is choked by peer " << remoteID
+                  << ", cannot request" << std::endl;
+        return;
+    }
+
+    // random
+    int pieceIndex = selectRandomPiece(remoteID);
+
+    if (pieceIndex == -1) {
+        std::cout << "Peer " << peerId << " has no pieces to request from peer "
+                  << remoteID << std::endl;
+
+        // Send not interested
+        sendMessage(peerSockets[remoteID], 3, {});  // type 3 = not interested
+        return;
+    }
+
+    // Create REQUEST message payload (4-byte piece index ad per the pdf)
+    std::vector<unsigned char> payload(4);
+    int32_t idxNet = htonl(pieceIndex);
+    //I hate c++
+    memcpy(payload.data(), &idxNet, 4);
+
+    // Send request message = type 6
+    sendMessage(peerSockets[remoteID], 6, payload);
+
+    std::cout << "Peer " << peerId << " requested piece " << pieceIndex
+              << " from peer " << remoteID << std::endl;
+
+}
+void Peer::sendPiece(int remoteID, int pieceIndex) {
+        // check if we have this piece in the first place
+    if (!bitfield[pieceIndex]) {
+        std::cerr << "Error: Peer " << peerId << " doesn't have piece " << pieceIndex << std::endl;
+        return;
+    }
+
+    // Load
+    std::vector<unsigned char> pieceData = loadPiece(pieceIndex);
+
+    if (pieceData.empty()) {
+        std::cerr << "Error: Failed to load piece " << pieceIndex << std::endl;
+        return;
+    }
+
+    // Create piece message payload: 4-byte index + piece data
+    std::vector<unsigned char> payload(4 + pieceData.size());
+    int32_t idxNet = htonl(pieceIndex);
+    memcpy(payload.data(), &idxNet, 4);
+    memcpy(payload.data() + 4, pieceData.data(), pieceData.size());
+
+    // Send PIECE message (type 7)
+    sendMessage(peerSockets[remoteID], 7, payload);
+
+    std::cout << "Peer " << peerId << " sent piece " << pieceIndex
+              << " to peer " << remoteID << " (" << pieceData.size()
+              << " bytes)" << std::endl;
+    //more debuging
+}
+void Peer::broadcastHave(int pieceIndex) {
+    // Create HAVE message payload (4byte index)
+    std::vector<unsigned char> payload(4);
+    int32_t idxNet = htonl(pieceIndex);
+    memcpy(payload.data(), &idxNet, 4);
+
+    // Send to all
+    for (auto& [remotePeerID, socket] : peerSockets) {
+        sendMessage(socket, 4, payload);  // type 4 = have
+    }
+
+    std::cout << "Peer " << peerId << " broadcasted HAVE for piece " << pieceIndex << " to all peers" << std::endl;
 }
