@@ -8,6 +8,7 @@
 #include <atomic>
 #include <arpa/inet.h>
 #include <fstream>
+#include <algorithm>
 #include "peer.h"
 
 std::atomic<bool> running{true};
@@ -17,7 +18,7 @@ Peer::Peer(int id) : peerId(id), logger(*this) {
     loadCommonConfig("../Common.cfg");
     loadPeerInfo("../PeerInfo.cfg");
 
-    int numPieces = (size + pieceSize - 1) / pieceSize;
+    numPieces = (fileSize + pieceSize - 1) / pieceSize;
     bitfield.resize(numPieces);
     if (self.hasFile) {
         std::fill(bitfield.begin(), bitfield.end(), true);
@@ -36,10 +37,10 @@ void Peer::start() {
     listener.join();
 }
 
-int Peer::loadPeerInfo(const std::string& fileName) {
-    std::ifstream file(fileName);
+int Peer::loadPeerInfo(const std::string& peerFile) {
+    std::ifstream file(peerFile);
     if (!file.is_open()) {
-        std::cerr << "Error: could not open " << fileName << std::endl;
+        std::cerr << "Error: could not open " << peerFile << std::endl;
         return 1;
     }
 
@@ -66,8 +67,8 @@ int Peer::loadPeerInfo(const std::string& fileName) {
     return 0;
 }
 
-int Peer::loadCommonConfig(const std::string& fileName) {
-    std::ifstream file(fileName);
+int Peer::loadCommonConfig(const std::string& configFile) {
+    std::ifstream file(configFile);
     if (!file.is_open()) {
         std::cerr << "Error: Could not open Common.cfg" << std::endl;
         return 1;
@@ -77,8 +78,8 @@ int Peer::loadCommonConfig(const std::string& fileName) {
     file >> key >> numPreferredNeighbors;
     file >> key >> unchokingInterval;
     file >> key >> optimisticUnchokingInterval;
-    file >> key >> name;
-    file >> key >> size;
+    file >> key >> fileName;
+    file >> key >> fileSize;
     file >> key >> pieceSize;
 
     file.close();
@@ -120,7 +121,7 @@ int Peer::listenForPeers() {
         int clientSocket = accept(serverSocket, (sockaddr*)&clientAddr, &clientSize);
 
         if (clientSocket >= 0) {
-            threads.emplace_back(&Peer::handleConnection, this, clientSocket);
+            threads.emplace_back(&Peer::handleConnection, this, clientSocket, false);
         }
     }
 
@@ -144,7 +145,7 @@ int Peer::connectToPeers() {
             serverAddr.sin_family = AF_INET;
             serverAddr.sin_port = htons(peerInfo.port);
             // change to local IP for local testing
-            inet_pton(AF_INET, "192.168.0.7", &serverAddr.sin_addr);
+            inet_pton(AF_INET, "192.168.0.42", &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
                 std::cerr << "Connection failed.\n";
@@ -152,50 +153,89 @@ int Peer::connectToPeers() {
             }
 
             // send handshake
-            auto handshake = createHandshake();
-            send(sock, handshake.data(), handshake.size(), 0);
-
+            sendHandshake(sock);
             // handle connection in a new thread
-            std::thread(&Peer::handleConnection, this, sock).detach();
+            std::thread(&Peer::handleConnection, this, sock, true).detach();
         }
     }
     return 0;
 }
 
-void Peer::handleConnection(int socket) {
-    int remotePeerID = -1;
+/* void Peer::handleConnectionAsListener(int sock) {
+    int remoteID = -1;
+    // receive handshake from connector
+    if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
 
-    // receive handshake from remote peer
-    if (!receiveHandshake(socket, remotePeerID)) {
-        close(socket);
-        return;
+    {
+        std::lock_guard<std::mutex> lg(socketMutex);
+        peerSockets[remoteID] = sock;
     }
-
-    peerSockets[remotePeerID] = socket;
-
-    std::cout << "Peer " << peerId << " connected with Peer " << remotePeerID << std::endl;
 
     // send handshake back
-    auto handshake = createHandshake();
-    send(socket, handshake.data(), handshake.size(), 0);
+    sendHandshake(sock);
 
-    // send bitfield
-    sendBitfield(socket);
+    // send bitfield after handshake
+    sendBitfield(sock);
 
-    //enter message loop
+    // enter message loop
     while (running) {
         Message msg;
-        if (!receiveMessage(socket, msg)) break;
+        if (!receiveMessage(sock, msg)) break;
 
-        handleMessage(remotePeerID, msg);
+        handleMessage(remoteID, msg);
     }
-
-    // cleanup
-    //peerSockets.erase(remotePeerID);
-    //close(socket);
 }
 
-std::vector<unsigned char> Peer::createHandshake() {
+void Peer::handleConnectionAsConnector(int sock) {
+    int remoteID = -1;
+    // receive handshake from listener
+    if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
+
+    {
+        std::lock_guard<std::mutex> lg(socketMutex);
+        peerSockets[remoteID] = sock;
+    }
+
+    // send bitfield after handshake
+    sendBitfield(sock);
+
+    // enter message loop
+    while (running) {
+        Message msg;
+        if (!receiveMessage(sock, msg)) break;
+
+        handleMessage(remoteID, msg);
+    }
+} */
+
+void Peer::handleConnection(int sock, bool isInitiator) {
+    int remoteID = -1;
+
+    if (isInitiator) {
+        // Already sent handshake in connectToPeers
+        if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
+    } else {
+        if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
+        sendHandshake(sock);
+    }
+
+    {
+        std::lock_guard<std::mutex> lg(socketMutex);
+        peerSockets[remoteID] = sock;
+    }
+
+    sendBitfield(sock);
+
+    while (running) {
+        Message msg;
+        if (!receiveMessage(sock, msg)) break;
+        handleMessage(remoteID, msg);
+    }
+}
+
+
+
+void Peer::sendHandshake(int socket) {
     std::vector<unsigned char> msg(32,0);
 
     const char* header = "P2PFILESHARINGPROJ";
@@ -204,13 +244,13 @@ std::vector<unsigned char> Peer::createHandshake() {
     int32_t idN = htonl(peerId);
     memcpy(msg.data() + 28, &idN, 4);
 
-    return msg;
+    send(socket, msg.data(), msg.size(), 0);
 }
 
 bool Peer::receiveHandshake(int socket, int &remotePeerID) {
     unsigned char hs[32];
 
-    ssize_t bytes = recv(socket, hs, 32, MSG_WAITALL);
+    ssize_t bytes = readNBytes(socket, hs, 32);
     if (bytes != 32)
         return false;
 
@@ -223,41 +263,26 @@ bool Peer::receiveHandshake(int socket, int &remotePeerID) {
 }
 
 void Peer::sendBitfield(int socket) {
-    // Format: length (4 bytes), type = 5, payload = bitfield
-    uint32_t length = htonl(1 + bitfield.size());
-    unsigned char type = 5;  // bitfield message type
-
-    std::vector<unsigned char> msg(4 + 1 + bitfield.size());
-    memcpy(msg.data(), &length, 4);
-    msg[4] = type;
-
-    // convert vector<bool> to bytes
-    for (size_t i = 0; i < bitfield.size(); i++)
-        msg[5 + i] = bitfield[i] ? 1 : 0;
-
-    send(socket, msg.data(), msg.size(), 0);
-
+    auto payload = bitfieldToBytes();
+    sendMessage(socket, 5, payload); // type 5 == bitfield
     std::cout << "Peer " << peerId << " sent bitfield" << std::endl;
 }
 
 bool Peer::receiveMessage(int socket, Message &msg) {
     // Format: length (4 bytes), type = 5, payload = bitfield
     uint32_t lenNet;
-    ssize_t bytes = recv(socket, &lenNet, 4, MSG_WAITALL);
-    if (bytes <= 0) return false;
+    if (readNBytes(socket, &lenNet, 4) <= 0) return false;
 
     msg.length = ntohl(lenNet);
 
     // read type
-    bytes = recv(socket, &msg.type, 1, MSG_WAITALL);
-    if (bytes <= 0) return false;
+    if (readNBytes(socket, &msg.type, 1) <= 0) return false;
 
     int payloadLen = msg.length - 1;
 
     msg.payload.resize(payloadLen);
     if (payloadLen > 0) {
-        bytes = recv(socket, msg.payload.data(), payloadLen, MSG_WAITALL);
-        if (bytes <= 0) return false;
+        if (readNBytes(socket, msg.payload.data(), payloadLen) <= 0) return false;
     }
 
     return true;
@@ -349,9 +374,7 @@ void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) 
 
 
     savePiece(idx, data);
-
-
-    bitfield[idx] = true;
+    updateMyBitfield(idx);
 
     // Remove from requested set
     {
@@ -359,49 +382,51 @@ void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) 
         requestedPieces.erase(idx);
     }
 
-
     logger.logDownloadingPiece(remoteID, idx, countPiecesOwned());
-
-    // Broadcast HAVE message to all
-    broadcastHave(idx);
-
-            // Check if download is complete
-    if (hasCompletedDownload())
-    {
-        logger.logDownloadComplete();
-        std::cout << "Peer " << peerId << " has completed download!" << std::endl;
-        // TODO: Check if ALL peers are done (termination condition)
-    }
-
-    // Request next piece from this peer
-    // CHECK FOR:
     requestNextPiece(remoteID);
 }
 
-void Peer::handleHave(int remoteID, const std::vector<unsigned char> &payload) {
-    int32_t pieceIndex;
-    memcpy(&pieceIndex, payload.data(), 4);
-    pieceIndex = ntohl(pieceIndex);
+void Peer::handleHave(int remoteID, const std::vector<unsigned char>& payload) {
+    if (payload.size() < 4) return; // malformed
+
+    int32_t idxNet;
+    memcpy(&idxNet, payload.data(), 4);
+    int pieceIndex = ntohl(idxNet);
 
     logger.logReceivingHave(remoteID, pieceIndex);
 
-    // Update their bitfield
-    if (neighborBitfields.count(remoteID)) {
-        neighborBitfields[remoteID][pieceIndex] = true;}
+    // bounds check
+    if (pieceIndex < 0 || pieceIndex >= (int)bitfield.size()) {
+        std::cerr << "Received HAVE for invalid piece index";
+        return;
+    }
 
-    // If we need this piece, send interested
-    if (!bitfield[pieceIndex]) {
-        sendMessage(peerSockets[remoteID], 2, {}); // interested
+    // update neighbor bitfield safely
+    {
+        std::lock_guard<std::mutex> lg(neighborMutex);
+        auto& bf = neighborBitfields[remoteID];
+        if ((int)bf.size() < (int)bitfield.size()) {
+            bf.resize(bitfield.size(), false);
+        }
+        bf[pieceIndex] = true;
+    }
+
+    // recalc whether we are interested
+    if (peerHasInterestingPieces(remoteID)) {
+        sendInterested(remoteID);
+    } else {
+        sendNotInterested(remoteID);
     }
 }
+
 void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payload) {
     // Store their bitfield
-    std::vector<bool> remoteBitfield(bitfield.size());
-    for (size_t i = 0; i < payload.size() && i < bitfield.size(); i++) {
-        remoteBitfield[i] = (payload[i] == 1);
-    }
-    neighborBitfields[remoteID] = remoteBitfield;
+    std::vector<bool> remoteBitfield = bytesToBitfield(payload, bitfield.size());
 
+    {
+        std::lock_guard<std::mutex> lg(neighborMutex);
+        neighborBitfields[remoteID] = remoteBitfield;
+    }
 
     // Check if they have anything we need
     bool interested = false;
@@ -412,13 +437,22 @@ void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payloa
         }
     }
 
-    // Send interested/not interested
-    unsigned char msgType = interested ? 2 : 3;
-    sendMessage(peerSockets[remoteID], msgType, {});
+    std::cout << "Peer " << peerId << " parsed remote bitfield from "
+              << remoteID << ": ";
+    for (bool b : remoteBitfield) std::cout << b;
+    std::cout << std::endl;
+
+    // Send interested/not interested using socket mutex
+    if (interested) sendInterested(remoteID);
+    else sendNotInterested(remoteID);
+
+    std::cout << "Peer " << peerId << " interest in " << remoteID
+              << " = " << interested << std::endl;
 }
+
 std::string Peer::getPieceFilePath(int pieceIndex) {
     std::string dirPath = "peer_" + std::to_string(peerId);
-    return dirPath + "/" + name;  // name is from Common.cfg
+    return dirPath + "/" + fileName;  // name is from Common.cfg
 }
 void Peer::savePiece(int pieceIndex, const std::vector<unsigned char>& data) {
     std::string filePath = getPieceFilePath(pieceIndex);
@@ -460,11 +494,10 @@ std::vector<unsigned char> Peer::loadPiece(int pieceIndex) {
     std::streampos offset = static_cast<std::streampos>(pieceIndex) * pieceSize;
 
     // Calculate piece size (last piece might be smaller)
-    int numPieces = (size + pieceSize - 1) / pieceSize;
     int currentPieceSize = pieceSize;
     if (pieceIndex == numPieces - 1) {
         // Last piece
-        currentPieceSize = size - (pieceIndex * pieceSize);
+        currentPieceSize = fileSize - (pieceIndex * pieceSize);
     }
 
     // Seek and read
@@ -596,16 +629,147 @@ void Peer::sendPiece(int remoteID, int pieceIndex) {
               << " bytes)" << std::endl;
     //more debuging
 }
+
 void Peer::broadcastHave(int pieceIndex) {
-    // Create HAVE message payload (4byte index)
+    if (pieceIndex < 0 || pieceIndex >= (int)bitfield.size())
+        return;
+
     std::vector<unsigned char> payload(4);
     int32_t idxNet = htonl(pieceIndex);
     memcpy(payload.data(), &idxNet, 4);
 
-    // Send to all
-    for (auto& [remotePeerID, socket] : peerSockets) {
-        sendMessage(socket, 4, payload);  // type 4 = have
+    std::vector<int> sockets;
+
+    {
+        std::lock_guard<std::mutex> lg(socketMutex);
+        for (auto& [remotePeerID, socket] : peerSockets) {
+            sockets.push_back(socket);
+        }
     }
 
-    std::cout << "Peer " << peerId << " broadcasted HAVE for piece " << pieceIndex << " to all peers" << std::endl;
+    for (int sock : sockets) {
+        sendMessage(sock, 4, payload);
+    }
+
+    // TODO: add this in logger
+    //logger.logBroadcastHave("Peer " + std::to_string(peerId) +
+    //           " broadcasted HAVE for piece " + std::to_string(pieceIndex));
+}
+
+
+// convert my vector<bool> bitfield to bytes for message payload
+std::vector<unsigned char> Peer::bitfieldToBytes() {
+    std::lock_guard<std::mutex> lg(bitfieldMutex);
+    int nbits = (int)bitfield.size();
+    int nbytes = (nbits + 7) / 8;
+    std::vector<unsigned char> out(nbytes, 0);
+
+    for (int i = 0; i < nbits; ++i) {
+        if (bitfield[i]) {
+            int byteIndex = i / 8;
+            int bitIndex = 7 - (i % 8); // highest bit = piece index 0 in that byte
+            out[byteIndex] |= (1 << bitIndex);
+        }
+    }
+    return out;
+}
+
+// parse byte payload into vector<bool> with expectedBits length
+std::vector<bool> Peer::bytesToBitfield(const std::vector<unsigned char>& payload, int expectedBits) {
+    std::vector<bool> out(expectedBits, false);
+    int nbytes = payload.size();
+    for (int b = 0; b < nbytes; ++b) {
+        unsigned char byte = payload[b];
+        for (int bit = 0; bit < 8; ++bit) {
+            int pieceIndex = b * 8 + bit;
+            if (pieceIndex >= expectedBits) break;
+            int bitPos = 7 - bit; // map high->low to indices
+            out[pieceIndex] = ((byte >> bitPos) & 0x1);
+        }
+    }
+    return out;
+}
+
+bool Peer::peerHasInterestingPieces(int remoteID) {
+    std::lock_guard<std::mutex> lg1(bitfieldMutex);
+    std::lock_guard<std::mutex> lg2(neighborMutex);
+
+    auto it = neighborBitfields.find(remoteID);
+    if (it == neighborBitfields.end()) return false;
+
+    const std::vector<bool>& neighborBF = it->second;
+    int n = std::min((int)bitfield.size(), (int)neighborBF.size());
+    for (int i = 0; i < n; ++i) {
+        if (neighborBF[i] && !bitfield[i]) return true; // they have something I don't
+    }
+    return false;
+}
+
+void Peer::updateMyBitfield(int pieceIndex) {
+    {
+        std::lock_guard<std::mutex> lg(bitfieldMutex);
+        if (pieceIndex < 0 || pieceIndex >= (int)bitfield.size()) return;
+        if (bitfield[pieceIndex]) return; // already set
+        bitfield[pieceIndex] = true;
+    }
+
+    // TODO: add this logger function
+    /*logger.log("Peer " + std::to_string(peerId) + " has downloaded piece " + std::to_string(pieceIndex)
+               + ". Now number of pieces: " + std::to_string(
+            std::count(bitfield.begin(), bitfield.end(), true)
+    ));*/
+
+    // broadcast HAVE to all neighbors
+    broadcastHave(pieceIndex);
+
+    // After setting, check if complete
+    {
+        std::lock_guard<std::mutex> lg(bitfieldMutex);
+        bool complete = std::all_of(bitfield.begin(), bitfield.end(), [](bool b){ return b; });
+        if (complete) {
+            // TODO: add this logger function
+            //logger.log("Peer " + std::to_string(peerId) + " has downloaded the complete file.");
+        }
+    }
+}
+
+void Peer::sendInterested(int remoteID) {
+    int sock = -1;
+    {
+        std::lock_guard<std::mutex> lg(socketMutex);
+        auto it = peerSockets.find(remoteID);
+        if (it == peerSockets.end()) return;
+        sock = it->second;
+    }
+    sendMessage(sock, 2, {}); // type 2 == interested
+
+    // TODO: add this logger
+    //logger.log("Peer " + std::to_string(peerId) + " sent 'interested' to " + std::to_string(remoteID));
+    std::cout << "sent interested" << std::endl;
+}
+
+void Peer::sendNotInterested(int remoteID) {
+    int sock = -1;
+    {
+        std::lock_guard<std::mutex> lg(socketMutex);
+        auto it = peerSockets.find(remoteID);
+        if (it == peerSockets.end()) return;
+        sock = it->second;
+    }
+    sendMessage(sock, 3, {}); // type 3 == not interested
+
+    // TODO: add this logger
+    //logger.log("Peer " + std::to_string(peerId) + " sent 'not interested' to " + std::to_string(remoteID));
+    std::cout << "sent not interested" << std::endl;
+}
+
+ssize_t Peer::readNBytes(int sock, void* buffer, size_t n) {
+    size_t total = 0;
+    char* ptr = (char*)buffer;
+    while (total < n) {
+        ssize_t r = recv(sock, ptr + total, n - total, 0);
+        if (r <= 0) return r; // error or closed
+        total += r;
+    }
+    return total;
 }

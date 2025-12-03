@@ -5,8 +5,8 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <mutex>
 #include "Logger.h"
-
 
 struct PeerInfo {
     int id;
@@ -51,9 +51,10 @@ private:
     int numPreferredNeighbors;
     int unchokingInterval;
     int optimisticUnchokingInterval;
-    std::string name;
-    long size;
+    std::string fileName;
+    long fileSize;
     int pieceSize;
+    int numPieces;
     std::vector<bool> bitfield;
     //std::unordered_map<int, std::vector<bool>> neighborBitfields;
     std::unordered_map<int, int> peerSockets;
@@ -61,13 +62,16 @@ private:
     std::map<int, std::vector<bool>> neighborBitfields;  // peerID -> their bitfield
     std::set<int> requestedPieces; // pieces we've already requested
     std::mutex requestedPiecesMutex;
+    std::mutex bitfieldMutex;
+    std::mutex neighborMutex;
+    std::mutex socketMutex;
 
-    int loadPeerInfo(const std::string& fileName);
-    int loadCommonConfig(const std::string& fileName);
+    int loadPeerInfo(const std::string& peerFile);
+    int loadCommonConfig(const std::string& configFile);
+    void handleConnection(int sock, bool isInitiator);
     int listenForPeers();
     int connectToPeers();
-    void handleConnection(int socket);
-    std::vector<unsigned char> createHandshake();
+    void sendHandshake(int socket);
     void sendBitfield(int socket);
     bool receiveHandshake(int socket, int &remotePeerID);
     bool receiveMessage(int socket, Message &msg);
@@ -81,6 +85,17 @@ private:
     void handlePiece(int remoteID, const std::vector<unsigned char>& payload);
     void handleHave(int remoteID, const std::vector<unsigned char>& payload);
     void handleBitfield(int remoteID, const std::vector<unsigned char>& payload);
+    ssize_t readNBytes(int sock, void* buffer, size_t n);
+
+    // bitfield helpers
+    std::vector<unsigned char> bitfieldToBytes(); // convert bitfield to payload bytes
+    std::vector<bool> bytesToBitfield(const std::vector<unsigned char>& payload, int expectedBits);
+
+    void updateMyBitfield(int pieceIndex); // mark piece downloaded and broadcast HAVE
+    bool peerHasInterestingPieces(int remoteID);
+    void sendInterested(int remoteID);
+    void sendNotInterested(int remoteID);
+
     // File handling
     void savePiece(int pieceIndex, const std::vector<unsigned char>& data);
     std::vector<unsigned char> loadPiece(int pieceIndex);
@@ -93,5 +108,4 @@ private:
     int selectRandomPiece(int remoteID);  // Returns -1 if no piece available
     bool hasCompletedDownload();
     int countPiecesOwned();
-
 };
