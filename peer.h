@@ -108,4 +108,6 @@ private:
     int selectRandomPiece(int remoteID);  // Returns -1 if no piece available
     bool hasCompletedDownload();
     int countPiecesOwned();
+
+    bool allPeersHaveCompleteFile();
 };

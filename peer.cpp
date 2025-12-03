@@ -177,6 +177,11 @@ void Peer::handleConnection(int sock, bool isInitiator) {
         peerSockets[remoteID] = sock;
     }
 
+    // **TEMPORARY**: Initialize as unchoked for testing piece exchange
+    // TODO: Remove this once choking/unchoking logic is implemented
+    neighborStates[remoteID].peerChoking = false;
+    neighborStates[remoteID].amChoking = false;
+
     sendBitfield(sock);
 
     while (running) {
@@ -354,7 +359,7 @@ void Peer::handleHave(int remoteID, const std::vector<unsigned char>& payload) {
         return;
     }
 
-    // update neighbor bitfield safely
+    // update neighbor bitfield
     {
         std::lock_guard<std::mutex> lg(neighborMutex);
         auto& bf = neighborBitfields[remoteID];
@@ -365,11 +370,19 @@ void Peer::handleHave(int remoteID, const std::vector<unsigned char>& payload) {
     }
 
     // recalc whether we are interested
-    if (peerHasInterestingPieces(remoteID)) {
+    bool wasInterested = neighborStates[remoteID].amInterested;
+    bool isNowInterested = peerHasInterestingPieces(remoteID);
+
+    if (isNowInterested && !wasInterested) {
         sendInterested(remoteID);
-    } else {
-        sendNotInterested(remoteID);
+        neighborStates[remoteID].amInterested = true;
+
+        if (!neighborStates[remoteID].peerChoking) {
+            requestNextPiece(remoteID);
+        }
     }
+
+
 }
 
 void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payload) {
@@ -396,15 +409,24 @@ void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payloa
     std::cout << std::endl;
 
     // Send interested/not interested using socket mutex
-    if (interested) sendInterested(remoteID);
-    else sendNotInterested(remoteID);
+    if (interested) {
+        sendInterested(remoteID);
+        neighborStates[remoteID].amInterested = true;
+        if (!neighborStates[remoteID].peerChoking) {
+            std::cout << "Peer " << peerId << " strarting requests from " << remoteID
+                      << remoteID << std::endl;
+            requestNextPiece(remoteID);
+        } else {
+            sendNotInterested(remoteID);
+            neighborStates[remoteID].amInterested = false;
+        }
+    }
 
-    std::cout << "Peer " << peerId << " interest in " << remoteID
-              << " = " << interested << std::endl;
+
 }
 
 std::string Peer::getPieceFilePath(int pieceIndex) {
-    std::string dirPath = "peer_" + std::to_string(peerId);
+    std::string dirPath = "../peer_" + std::to_string(peerId);
     return dirPath + "/" + fileName;  // name is from Common.cfg
 }
 void Peer::savePiece(int pieceIndex, const std::vector<unsigned char>& data) {
@@ -666,22 +688,39 @@ void Peer::updateMyBitfield(int pieceIndex) {
         bitfield[pieceIndex] = true;
     }
 
-    // TODO: add this logger function
-    /*logger.log("Peer " + std::to_string(peerId) + " has downloaded piece " + std::to_string(pieceIndex)
-               + ". Now number of pieces: " + std::to_string(
-            std::count(bitfield.begin(), bitfield.end(), true)
-    ));*/
+    std::cout << "Peer " << peerId << " completed piece " << pieceIndex
+              << " (" << countPiecesOwned() << "/" << numPieces << ")" << std::endl;
 
-    // broadcast HAVE to all neighbors
     broadcastHave(pieceIndex);
 
-    // After setting, check if complete
+    std::vector<int> peerIDs;
     {
-        std::lock_guard<std::mutex> lg(bitfieldMutex);
-        bool complete = std::all_of(bitfield.begin(), bitfield.end(), [](bool b){ return b; });
-        if (complete) {
-            // TODO: add this logger function
-            //logger.log("Peer " + std::to_string(peerId) + " has downloaded the complete file.");
+        std::lock_guard<std::mutex> lg(socketMutex);
+        for (auto& [id, sock] : peerSockets) {
+            peerIDs.push_back(id);
+        }
+    }
+
+    for (int remoteID : peerIDs) {
+        bool wasInterested = neighborStates[remoteID].amInterested;
+        bool isInteresting = peerHasInterestingPieces(remoteID);
+
+        if (!isInteresting && wasInterested) {
+            sendNotInterested(remoteID);
+            neighborStates[remoteID].amInterested = false;
+            std::cout << "Peer " << peerId << " no longer interested in "
+                      << remoteID << std::endl;
+        }
+    }
+
+    // Check download completion
+    if (hasCompletedDownload()) {
+        std::cout << "Peer " << peerId << " has downloaded the complete file!"
+                  << std::endl;
+
+        if (allPeersHaveCompleteFile()) {
+            std::cout << "All peers have complete file. Terminating..." << std::endl;
+            running = false;
         }
     }
 }
@@ -725,4 +764,14 @@ ssize_t Peer::readNBytes(int sock, void* buffer, size_t n) {
         total += r;
     }
     return total;
+}
+bool Peer::allPeersHaveCompleteFile() {
+    std::lock_guard<std::mutex> lg(neighborMutex);
+
+    for (auto& [remoteID, bf] : neighborBitfields) {
+        for (bool hasPiece : bf) {
+            if (!hasPiece) return false;
+        }
+    }
+    return true;
 }
