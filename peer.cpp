@@ -161,53 +161,6 @@ int Peer::connectToPeers() {
     return 0;
 }
 
-/* void Peer::handleConnectionAsListener(int sock) {
-    int remoteID = -1;
-    // receive handshake from connector
-    if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
-
-    {
-        std::lock_guard<std::mutex> lg(socketMutex);
-        peerSockets[remoteID] = sock;
-    }
-
-    // send handshake back
-    sendHandshake(sock);
-
-    // send bitfield after handshake
-    sendBitfield(sock);
-
-    // enter message loop
-    while (running) {
-        Message msg;
-        if (!receiveMessage(sock, msg)) break;
-
-        handleMessage(remoteID, msg);
-    }
-}
-
-void Peer::handleConnectionAsConnector(int sock) {
-    int remoteID = -1;
-    // receive handshake from listener
-    if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
-
-    {
-        std::lock_guard<std::mutex> lg(socketMutex);
-        peerSockets[remoteID] = sock;
-    }
-
-    // send bitfield after handshake
-    sendBitfield(sock);
-
-    // enter message loop
-    while (running) {
-        Message msg;
-        if (!receiveMessage(sock, msg)) break;
-
-        handleMessage(remoteID, msg);
-    }
-} */
-
 void Peer::handleConnection(int sock, bool isInitiator) {
     int remoteID = -1;
 
