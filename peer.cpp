@@ -32,9 +32,32 @@ int Peer::getPeerId() {
 }
 
 void Peer::start() {
+    srand(time(nullptr) + peerId);  // seed random for piece selection
+
     std::thread listener(&Peer::listenForPeers, this);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));  // give listener time to start
+
     connectToPeers();
-    listener.join();
+
+    // Start the timer threads for choking/unchoking
+    std::thread prefTimer(&Peer::preferredNeighborTimer, this);
+    std::thread optTimer(&Peer::optimisticUnchokeTimer, this);
+
+    // Main thread monitors for completion
+    while (running) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (allPeersComplete()) {
+            std::cout << "Peer " << peerId << " detected all peers complete. Shutting down..." << std::endl;
+            logger.logDownloadComplete();
+            running = false;
+            break;
+        }
+    }
+
+    // Wait for threads to finish
+    if (prefTimer.joinable()) prefTimer.join();
+    if (optTimer.joinable()) optTimer.join();
+    if (listener.joinable()) listener.join();
 }
 
 int Peer::loadPeerInfo(const std::string& peerFile) {
@@ -145,7 +168,7 @@ int Peer::connectToPeers() {
             serverAddr.sin_family = AF_INET;
             serverAddr.sin_port = htons(peerInfo.port);
             // change to local IP for local testing
-            inet_pton(AF_INET, "192.168.0.42", &serverAddr.sin_addr);
+            inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
                 std::cerr << "Connection failed.\n";
@@ -725,4 +748,151 @@ ssize_t Peer::readNBytes(int sock, void* buffer, size_t n) {
         total += r;
     }
     return total;
+}
+// choke/unchoke - esha
+void Peer::selectPreferredNeighbors() {
+    std::lock_guard<std::mutex> lock(neighborMutex);
+
+    std::vector<std::pair<int, double>> candidates;
+
+    for (auto& [peerID, state] : neighborStates) {
+        if (state.peerInterested) {
+            candidates.push_back({peerID, state.downloadRate});
+        }
+    }
+
+    if (hasCompletedDownload()) {
+        std::random_shuffle(candidates.begin(), candidates.end());
+    } else {
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second; });
+    }
+
+    std::vector<int> newPreferredNeighbors;
+    int count = std::min((int)candidates.size(), numPreferredNeighbors);
+    for (int i = 0; i < count; i++) {
+        newPreferredNeighbors.push_back(candidates[i].first);
+    }
+
+    if (!newPreferredNeighbors.empty()) {
+        logger.logPreferredNeighborsChange(newPreferredNeighbors);
+    }
+
+    for (int peerID : newPreferredNeighbors) {
+        if (neighborStates[peerID].amChoking) {
+            neighborStates[peerID].amChoking = false;
+            int sock;
+            {
+                std::lock_guard<std::mutex> lg(socketMutex);
+                sock = peerSockets[peerID];
+            }
+            sendMessage(sock, 1, {}); // unchoke
+            std::cout << "Peer " << peerId << " sent UNCHOKE to peer " << peerID << std::endl;
+        }
+    }
+
+    for (auto& [peerID, state] : neighborStates) {
+        bool isPreferred = std::find(newPreferredNeighbors.begin(), newPreferredNeighbors.end(), peerID) != newPreferredNeighbors.end();
+        bool isOptimistic = (peerID == optimisticallyUnchokedNeighbor);
+
+        if (!isPreferred && !isOptimistic && !state.amChoking) {
+            state.amChoking = true;
+            int sock;
+            {
+                std::lock_guard<std::mutex> lg(socketMutex);
+                sock = peerSockets[peerID];
+            }
+            sendMessage(sock, 0, {}); // choke
+            std::cout << "Peer " << peerId << " sent CHOKE to peer " << peerID << std::endl;
+        }
+    }
+
+    for (auto& [peerID, state] : neighborStates) {
+        state.downloadRate = 0.0;
+        state.bytesDownloaded = 0;
+    }
+}
+
+void Peer::selectOptimisticallyUnchokedNeighbor() {
+    std::lock_guard<std::mutex> lock(neighborMutex);
+
+    std::vector<int> candidates;
+    for (auto& [peerID, state] : neighborStates) {
+        if (state.amChoking && state.peerInterested) {
+            candidates.push_back(peerID);
+        }
+    }
+
+    if (candidates.empty()) {
+        return;
+    }
+
+    int randomIndex = rand() % candidates.size();
+    int selectedPeer = candidates[randomIndex];
+
+    if (optimisticallyUnchokedNeighbor != -1 && optimisticallyUnchokedNeighbor != selectedPeer) {
+        auto& oldState = neighborStates[optimisticallyUnchokedNeighbor];
+        if (!oldState.amChoking) {
+            oldState.amChoking = true;
+            int sock;
+            {
+                std::lock_guard<std::mutex> lg(socketMutex);
+                sock = peerSockets[optimisticallyUnchokedNeighbor];
+            }
+            sendMessage(sock, 0, {}); // choke
+            std::cout << "Peer " << peerId << " sent CHOKE to peer " << optimisticallyUnchokedNeighbor << std::endl;
+        }
+    }
+
+    optimisticallyUnchokedNeighbor = selectedPeer;
+    logger.logOptimisticallyUnchokedNeighbor(selectedPeer);
+
+    neighborStates[selectedPeer].amChoking = false;
+    int sock;
+    {
+        std::lock_guard<std::mutex> lg(socketMutex);
+        sock = peerSockets[selectedPeer];
+    }
+    sendMessage(sock, 1, {}); // unchoke
+    std::cout << "Peer " << peerId << " sent UNCHOKE to peer " << selectedPeer << std::endl;
+}
+
+void Peer::preferredNeighborTimer() {
+    while (running) {
+        std::this_thread::sleep_for(std::chrono::seconds(unchokingInterval));
+        if (!running) break;
+        selectPreferredNeighbors();
+    }
+}
+
+void Peer::optimisticUnchokeTimer() {
+    while (running) {
+        std::this_thread::sleep_for(std::chrono::seconds(optimisticUnchokingInterval));
+        if (!running) break;
+        selectOptimisticallyUnchokedNeighbor();
+    }
+}
+
+void Peer::updateDownloadRate(int remoteID, size_t bytes) {
+    std::lock_guard<std::mutex> lock(neighborMutex);
+    neighborStates[remoteID].bytesDownloaded += bytes;
+    neighborStates[remoteID].downloadRate =
+        neighborStates[remoteID].bytesDownloaded / (double)unchokingInterval;
+}
+
+bool Peer::allPeersComplete() {
+    if (!hasCompletedDownload()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(neighborMutex);
+    for (auto& [peerID, bitfield] : neighborBitfields) {
+        for (bool hasPiece : bitfield) {
+            if (!hasPiece) {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }

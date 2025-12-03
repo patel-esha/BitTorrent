@@ -66,6 +66,9 @@ private:
     std::mutex neighborMutex;
     std::mutex socketMutex;
 
+    std::vector<int> preferredNeighbors;
+    int optimisticallyUnchokedNeighbor = -1;
+
     int loadPeerInfo(const std::string& peerFile);
     int loadCommonConfig(const std::string& configFile);
     void handleConnection(int sock, bool isInitiator);
@@ -108,4 +111,12 @@ private:
     int selectRandomPiece(int remoteID);  // Returns -1 if no piece available
     bool hasCompletedDownload();
     int countPiecesOwned();
+
+    // Choking/unchoking mechanism
+    void selectPreferredNeighbors();
+    void selectOptimisticallyUnchokedNeighbor();
+    void preferredNeighborTimer();
+    void optimisticUnchokeTimer();
+    void updateDownloadRate(int remoteID, size_t bytes);
+    bool allPeersComplete();
 };
