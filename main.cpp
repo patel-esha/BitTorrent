@@ -17,9 +17,6 @@ int main(int argc, char* argv[]) {
     int peer2 = 1008;
     Peer peer(peerID);
     peer.start();
-    peer.logger.logTCPConnectionMade(peer2);
-    peer.logger.logChoking(peer2);
-    peer.logger.logUnchoking(peer2);
 
     return 0;
 }
