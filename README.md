@@ -1,3 +1,6 @@
+# Group
+Gabriel, Richard, Esha
+
 Guys please let me know if you need any help with the logging, i provided examples but have yet to integrate it with the peer class, idealy each class would have a memeber logger created at runtime
 
 # Testing Setup
@@ -33,5 +36,6 @@ Should use peerInfo.hostName or resolve it properly
 * But we have:   
 
 for (size_t i = 0; i < bitfield.size(); i++)
+
 
 msg[5 + i] = bitfield[i] ? 1 : 0;
