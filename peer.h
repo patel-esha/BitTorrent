@@ -34,7 +34,6 @@ struct NeighborState {
     bool amInterested = false;    // Are we interested in them
     double downloadRate = 0.0; // bytes/sec provided
     long bytesDownloaded = 0; // For best Neighbor
-    long bytesUploaded = 0; //
 };
 
 class Peer {
@@ -56,7 +55,7 @@ private:
     int pieceSize;
     int numPieces;
     std::vector<bool> bitfield;
-    //std::unordered_map<int, std::vector<bool>> neighborBitfields;
+    int optimisticallyUnchokedNeighbor = -1;
     std::unordered_map<int, int> peerSockets;
     std::unordered_map<int, NeighborState> neighborStates;
     std::map<int, std::vector<bool>> neighborBitfields;  // peerID -> their bitfield
