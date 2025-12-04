@@ -32,6 +32,7 @@ int Peer::getPeerId() {
 }
 
 void Peer::start() {
+    signal(SIGPIPE, SIG_IGN);
     srand(time(nullptr) + peerId);  // seed random for piece selection
 
     std::thread listener(&Peer::listenForPeers, this);
@@ -65,7 +66,8 @@ int Peer::loadPeerInfo(const std::string& peerFile) {
     while (file >> id >> host >> port >> hasFile) {
         PeerInfo info;
         info.id = id;
-        info.hostName = "localhost";
+        //info.hostName = "localhost";
+        info.hostName = host;
         info.port = port;
         info.hasFile = hasFile;
         peers.push_back(info);
@@ -168,6 +170,8 @@ int Peer::connectToPeers() {
             sendHandshake(sock);
             // handle connection in a new thread
             std::thread(&Peer::handleConnection, this, sock, true).detach();
+            logger.logTCPConnectionMade(peerInfo.id);
+
         }
     }
     return 0;
@@ -179,9 +183,11 @@ void Peer::handleConnection(int sock, bool isInitiator) {
     if (isInitiator) {
         // Already sent handshake in connectToPeers
         if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
+        logger.logTCPConnectionMade(remoteID);
     } else {
         if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
         sendHandshake(sock);
+        logger.logTCPConnectionReceived(remoteID);
     }
 
     {
@@ -223,7 +229,6 @@ bool Peer::receiveHandshake(int socket, int &remotePeerID) {
     memcpy(&id, hs + 28, sizeof(id));
     remotePeerID = ntohl(id);
     std::cout << "Peer " << peerId << " received handshake from Peer " << remotePeerID << std::endl;
-
     return true;
 }
 
@@ -265,7 +270,12 @@ bool Peer::sendMessage(int socket, unsigned char type, const std::vector<unsigne
     memcpy(buf.data() + 5, payload.data(), payload.size());
 
     ssize_t sent = send(socket, buf.data(), buf.size(), 0);
-    return sent == static_cast<ssize_t>(buf.size());
+    if (sent != static_cast<ssize_t>(buf.size())) {
+        // Connection closed, just return false instead of crashing
+        return false;
+    }
+
+    return true;
 }
 
 void Peer::handleMessage(int remoteID, const Message &msg) {
@@ -296,6 +306,23 @@ void Peer::handleNotInterested(int remoteID) {
 void Peer::handleChoke(int remoteID) {
     neighborStates[remoteID].peerChoking = true;
     logger.logChoking(remoteID);
+
+    std::cout << "Peer " << peerId << " is choked by peer " << remoteID << std::endl;
+
+    // Clear any pending requests from this peer before !
+    {
+        std::lock_guard<std::mutex> lock(requestedPiecesMutex);
+        auto it = requestedPieces.begin();
+        while (it != requestedPieces.end()) {
+            if (it->second == remoteID) {
+                std::cout << "Peer " << peerId << " clearing pending request for piece "
+                          << it->first << " from choked peer " << remoteID << std::endl;
+                it = requestedPieces.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 }
 
 //this function was pretty much done idk why there was a TODO here but mby im missing something
@@ -329,7 +356,6 @@ void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) 
     int32_t idx;
     memcpy(&idx, payload.data(), 4);
     idx = ntohl(idx);
-    //same as before
 
     std::vector<unsigned char> data(payload.begin() + 4, payload.end());
 
@@ -337,14 +363,14 @@ void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) 
               << " from peer " << remoteID << " (" << data.size()
               << " bytes)" << std::endl;
 
-
     savePiece(idx, data);
     updateMyBitfield(idx);
+    updateDownloadRate(remoteID, data.size());
 
-    // Remove from requested set
+    // Remove from requested map
     {
         std::lock_guard<std::mutex> lock(requestedPiecesMutex);
-        requestedPieces.erase(idx);
+        requestedPieces.erase(idx);  // This works with map too so no need to refatcor
     }
 
     logger.logDownloadingPiece(remoteID, idx, countPiecesOwned());
@@ -500,7 +526,7 @@ std::vector<unsigned char> Peer::loadPiece(int pieceIndex) {
     return data;
 }
 int Peer::selectRandomPiece(int remoteID) {
-    //check if we have neighbor bitfield
+    // check if we have neighbor bitfield
     if (neighborBitfields.find(remoteID) == neighborBitfields.end()) {
         return -1;  // Don't know what they have
     }
@@ -508,15 +534,15 @@ int Peer::selectRandomPiece(int remoteID) {
     std::vector<bool>& remoteBitfield = neighborBitfields[remoteID];
 
     // Find pieces that:
-    // 1.remote peer has
-    // 2.We dont have
-    // 3.we havent requested yet
+    // 1. remote peer has
+    // 2. We don't have
+    // 3. we haven't requested yet
     std::vector<int> availablePieces;
 
     std::lock_guard<std::mutex> lock(requestedPiecesMutex);
 
     for (size_t i = 0; i < bitfield.size(); i++) {
-        if (!bitfield[i] &&                           // We dont have it
+        if (!bitfield[i] &&                           // We don't have it
             remoteBitfield[i] &&                      // They have it
             requestedPieces.find(i) == requestedPieces.end()) // Not requested
         {
@@ -525,15 +551,15 @@ int Peer::selectRandomPiece(int remoteID) {
     }
 
     if (availablePieces.empty()) {
-        return -1;  // No pieces available
+        return -1;
     }
 
     // Random selection
     int randomIndex = rand() % availablePieces.size();
-    int selectedPiece = availablePieces[randomIndex];
+        int selectedPiece = availablePieces[randomIndex];
 
-    // Mark as requested
-    requestedPieces.insert(selectedPiece);
+    // mark as requested with the peer ID
+    requestedPieces[selectedPiece] = remoteID;
 
     std::cout << "Peer " << peerId << " selected piece " << selectedPiece
               << " from peer " << remoteID << std::endl;
@@ -553,6 +579,7 @@ bool Peer::hasCompletedDownload() {
     for (bool hasPiece : bitfield) {
         if (!hasPiece) return false;
     }
+    logger.logDownloadComplete();
     return true;
 }
 void Peer::requestNextPiece(int remoteID) {
@@ -639,7 +666,7 @@ void Peer::broadcastHave(int pieceIndex) {
         sendMessage(sock, 4, payload);
     }
 
-    // TODO: add this in logger
+
     //logger.logBroadcastHave("Peer " + std::to_string(peerId) +
     //           " broadcasted HAVE for piece " + std::to_string(pieceIndex));
 }
@@ -748,8 +775,9 @@ void Peer::sendInterested(int remoteID) {
     }
     sendMessage(sock, 2, {}); // type 2 == interested
 
-    // TODO: add this logger
+
     //logger.log("Peer " + std::to_string(peerId) + " sent 'interested' to " + std::to_string(remoteID));
+    logger.logReceivingInterested(remoteID);
     std::cout << "sent interested" << std::endl;
 }
 
@@ -763,8 +791,8 @@ void Peer::sendNotInterested(int remoteID) {
     }
     sendMessage(sock, 3, {}); // type 3 == not interested
 
-    // TODO: add this logger
     //logger.log("Peer " + std::to_string(peerId) + " sent 'not interested' to " + std::to_string(remoteID));
+    logger.logReceivingNotInterested(remoteID);
     std::cout << "sent not interested" << std::endl;
 }
 
@@ -915,6 +943,14 @@ bool Peer::allPeersComplete() {
     }
 
     std::lock_guard<std::mutex> lock(neighborMutex);
+
+    // ✅ Check if we've heard from ALL peers (not just some)
+    int expectedPeers = peers.size() - 1;  // All except myself
+    if (neighborBitfields.size() < expectedPeers) {
+        return false;  // Haven't heard from everyone yet
+    }
+
+    // Now check if all known peers are complete
     for (auto& [peerID, bitfield] : neighborBitfields) {
         for (bool hasPiece : bitfield) {
             if (!hasPiece) {

@@ -59,7 +59,7 @@ private:
     std::unordered_map<int, int> peerSockets;
     std::unordered_map<int, NeighborState> neighborStates;
     std::map<int, std::vector<bool>> neighborBitfields;  // peerID -> their bitfield
-    std::set<int> requestedPieces; // pieces we've already requested
+    std::map<int, int> requestedPieces; // piece index -> peer ID we requested from
     std::mutex requestedPiecesMutex;
     std::mutex bitfieldMutex;
     std::mutex neighborMutex;
