@@ -108,8 +108,6 @@ private:
     bool hasCompletedDownload();
     int countPiecesOwned();
 
-    bool allPeersHaveCompleteFile();
-
     // Choking/unchoking mechanism
     void selectPreferredNeighbors();
     void selectOptimisticallyUnchokedNeighbor();

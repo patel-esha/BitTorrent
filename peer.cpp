@@ -43,17 +43,6 @@ void Peer::start() {
     std::thread prefTimer(&Peer::preferredNeighborTimer, this);
     std::thread optTimer(&Peer::optimisticUnchokeTimer, this);
 
-    // Main thread monitors for completion
-    while (running) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        if (allPeersComplete()) {
-            std::cout << "Peer " << peerId << " detected all peers complete. Shutting down..." << std::endl;
-            logger.logDownloadComplete();
-            running = false;
-            break;
-        }
-    }
-
     // Wait for threads to finish
     if (prefTimer.joinable()) prefTimer.join();
     if (optTimer.joinable()) optTimer.join();
@@ -399,6 +388,11 @@ void Peer::handleHave(int remoteID, const std::vector<unsigned char>& payload) {
             requestNextPiece(remoteID);
         }
     }
+
+    if (hasCompletedDownload() && allPeersComplete()) {
+        std::cout << "All peers have complete file. Terminating..." << std::endl;
+        running = false;
+    }
 }
 
 void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payload) {
@@ -436,6 +430,11 @@ void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payloa
             sendNotInterested(remoteID);
             neighborStates[remoteID].amInterested = false;
         }
+    }
+
+    if (hasCompletedDownload() && allPeersComplete()) {
+        std::cout << "All peers have complete file. Terminating..." << std::endl;
+        running = false;
     }
 }
 
@@ -732,7 +731,7 @@ void Peer::updateMyBitfield(int pieceIndex) {
         std::cout << "Peer " << peerId << " has downloaded the complete file!"
                   << std::endl;
 
-        if (allPeersHaveCompleteFile()) {
+        if (allPeersComplete()) {
             std::cout << "All peers have complete file. Terminating..." << std::endl;
             running = false;
         }
@@ -924,15 +923,5 @@ bool Peer::allPeersComplete() {
         }
     }
 
-    return true;
-}
-bool Peer::allPeersHaveCompleteFile() {
-    std::lock_guard<std::mutex> lg(neighborMutex);
-
-    for (auto& [remoteID, bf] : neighborBitfields) {
-        for (bool hasPiece : bf) {
-            if (!hasPiece) return false;
-        }
-    }
     return true;
 }
