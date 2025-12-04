@@ -169,6 +169,8 @@ int Peer::connectToPeers() {
             sendHandshake(sock);
             // handle connection in a new thread
             std::thread(&Peer::handleConnection, this, sock, true).detach();
+            logger.logTCPConnectionMade(peerInfo.id);
+
         }
     }
     return 0;
@@ -224,7 +226,7 @@ bool Peer::receiveHandshake(int socket, int &remotePeerID) {
     memcpy(&id, hs + 28, sizeof(id));
     remotePeerID = ntohl(id);
     std::cout << "Peer " << peerId << " received handshake from Peer " << remotePeerID << std::endl;
-
+    logger.logTCPConnectionReceived(remotePeerID);
     return true;
 }
 
@@ -570,6 +572,7 @@ bool Peer::hasCompletedDownload() {
     for (bool hasPiece : bitfield) {
         if (!hasPiece) return false;
     }
+    logger.logDownloadComplete();
     return true;
 }
 void Peer::requestNextPiece(int remoteID) {
@@ -656,7 +659,7 @@ void Peer::broadcastHave(int pieceIndex) {
         sendMessage(sock, 4, payload);
     }
 
-    // TODO: add this in logger
+
     //logger.logBroadcastHave("Peer " + std::to_string(peerId) +
     //           " broadcasted HAVE for piece " + std::to_string(pieceIndex));
 }
@@ -765,8 +768,9 @@ void Peer::sendInterested(int remoteID) {
     }
     sendMessage(sock, 2, {}); // type 2 == interested
 
-    // TODO: add this logger
+
     //logger.log("Peer " + std::to_string(peerId) + " sent 'interested' to " + std::to_string(remoteID));
+    logger.logReceivingInterested(remoteID);
     std::cout << "sent interested" << std::endl;
 }
 
@@ -780,8 +784,8 @@ void Peer::sendNotInterested(int remoteID) {
     }
     sendMessage(sock, 3, {}); // type 3 == not interested
 
-    // TODO: add this logger
     //logger.log("Peer " + std::to_string(peerId) + " sent 'not interested' to " + std::to_string(remoteID));
+    logger.logReceivingNotInterested(remoteID);
     std::cout << "sent not interested" << std::endl;
 }
 
