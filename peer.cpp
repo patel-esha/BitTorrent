@@ -159,7 +159,7 @@ int Peer::connectToPeers() {
             serverAddr.sin_family = AF_INET;
             serverAddr.sin_port = htons(peerInfo.port);
             // change to local IP for local testing
-            inet_pton(AF_INET, "192.168.0.42", &serverAddr.sin_addr);
+            inet_pton(AF_INET, peerInfo.hostName.c_str(), &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
                 std::cerr << "Connection failed.\n";
