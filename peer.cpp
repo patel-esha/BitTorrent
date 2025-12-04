@@ -182,9 +182,11 @@ void Peer::handleConnection(int sock, bool isInitiator) {
     if (isInitiator) {
         // Already sent handshake in connectToPeers
         if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
+        logger.logTCPConnectionMade(remoteID);
     } else {
         if (!receiveHandshake(sock, remoteID)) { close(sock); return; }
         sendHandshake(sock);
+        logger.logTCPConnectionReceived(remoteID);
     }
 
     {
@@ -226,7 +228,6 @@ bool Peer::receiveHandshake(int socket, int &remotePeerID) {
     memcpy(&id, hs + 28, sizeof(id));
     remotePeerID = ntohl(id);
     std::cout << "Peer " << peerId << " received handshake from Peer " << remotePeerID << std::endl;
-    logger.logTCPConnectionReceived(remotePeerID);
     return true;
 }
 
