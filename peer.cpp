@@ -426,10 +426,10 @@ void Peer::handleBitfield(int remoteID, const std::vector<unsigned char> &payloa
             std::cout << "Peer " << peerId << " strarting requests from " << remoteID
                       << remoteID << std::endl;
             requestNextPiece(remoteID);
-        } else {
-            sendNotInterested(remoteID);
-            neighborStates[remoteID].amInterested = false;
         }
+    } else {
+        sendNotInterested(remoteID);
+        neighborStates[remoteID].amInterested = false;
     }
 
     if (hasCompletedDownload() && allPeersComplete()) {
