@@ -65,7 +65,8 @@ int Peer::loadPeerInfo(const std::string& peerFile) {
     while (file >> id >> host >> port >> hasFile) {
         PeerInfo info;
         info.id = id;
-        info.hostName = "localhost";
+        //info.hostName = "localhost";
+        info.hostName = host;
         info.port = port;
         info.hasFile = hasFile;
         peers.push_back(info);
@@ -157,7 +158,7 @@ int Peer::connectToPeers() {
             serverAddr.sin_family = AF_INET;
             serverAddr.sin_port = htons(peerInfo.port);
             // change to local IP for local testing
-            inet_pton(AF_INET, "192.168.0.42", &serverAddr.sin_addr);
+            inet_pton(AF_INET, "192.168.0.7", &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
                 std::cerr << "Connection failed.\n";
@@ -296,6 +297,23 @@ void Peer::handleNotInterested(int remoteID) {
 void Peer::handleChoke(int remoteID) {
     neighborStates[remoteID].peerChoking = true;
     logger.logChoking(remoteID);
+
+    std::cout << "Peer " << peerId << " is choked by peer " << remoteID << std::endl;
+
+    // Clear any pending requests from this peer before !
+    {
+        std::lock_guard<std::mutex> lock(requestedPiecesMutex);
+        auto it = requestedPieces.begin();
+        while (it != requestedPieces.end()) {
+            if (it->second == remoteID) {
+                std::cout << "Peer " << peerId << " clearing pending request for piece "
+                          << it->first << " from choked peer " << remoteID << std::endl;
+                it = requestedPieces.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 }
 
 //this function was pretty much done idk why there was a TODO here but mby im missing something
@@ -329,7 +347,6 @@ void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) 
     int32_t idx;
     memcpy(&idx, payload.data(), 4);
     idx = ntohl(idx);
-    //same as before
 
     std::vector<unsigned char> data(payload.begin() + 4, payload.end());
 
@@ -337,14 +354,14 @@ void Peer::handlePiece(int remoteID, const std::vector<unsigned char>& payload) 
               << " from peer " << remoteID << " (" << data.size()
               << " bytes)" << std::endl;
 
-
     savePiece(idx, data);
     updateMyBitfield(idx);
+    updateDownloadRate(remoteID, data.size());
 
-    // Remove from requested set
+    // Remove from requested map
     {
         std::lock_guard<std::mutex> lock(requestedPiecesMutex);
-        requestedPieces.erase(idx);
+        requestedPieces.erase(idx);  // This works with map too so no need to refatcor
     }
 
     logger.logDownloadingPiece(remoteID, idx, countPiecesOwned());
@@ -500,7 +517,7 @@ std::vector<unsigned char> Peer::loadPiece(int pieceIndex) {
     return data;
 }
 int Peer::selectRandomPiece(int remoteID) {
-    //check if we have neighbor bitfield
+    // check if we have neighbor bitfield
     if (neighborBitfields.find(remoteID) == neighborBitfields.end()) {
         return -1;  // Don't know what they have
     }
@@ -508,15 +525,15 @@ int Peer::selectRandomPiece(int remoteID) {
     std::vector<bool>& remoteBitfield = neighborBitfields[remoteID];
 
     // Find pieces that:
-    // 1.remote peer has
-    // 2.We dont have
-    // 3.we havent requested yet
+    // 1. remote peer has
+    // 2. We don't have
+    // 3. we haven't requested yet
     std::vector<int> availablePieces;
 
     std::lock_guard<std::mutex> lock(requestedPiecesMutex);
 
     for (size_t i = 0; i < bitfield.size(); i++) {
-        if (!bitfield[i] &&                           // We dont have it
+        if (!bitfield[i] &&                           // We don't have it
             remoteBitfield[i] &&                      // They have it
             requestedPieces.find(i) == requestedPieces.end()) // Not requested
         {
@@ -525,15 +542,15 @@ int Peer::selectRandomPiece(int remoteID) {
     }
 
     if (availablePieces.empty()) {
-        return -1;  // No pieces available
+        return -1;
     }
 
     // Random selection
     int randomIndex = rand() % availablePieces.size();
-    int selectedPiece = availablePieces[randomIndex];
+        int selectedPiece = availablePieces[randomIndex];
 
-    // Mark as requested
-    requestedPieces.insert(selectedPiece);
+    // mark as requested with the peer ID
+    requestedPieces[selectedPiece] = remoteID;
 
     std::cout << "Peer " << peerId << " selected piece " << selectedPiece
               << " from peer " << remoteID << std::endl;
