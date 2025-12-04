@@ -32,6 +32,7 @@ int Peer::getPeerId() {
 }
 
 void Peer::start() {
+    signal(SIGPIPE, SIG_IGN);
     srand(time(nullptr) + peerId);  // seed random for piece selection
 
     std::thread listener(&Peer::listenForPeers, this);
@@ -158,7 +159,7 @@ int Peer::connectToPeers() {
             serverAddr.sin_family = AF_INET;
             serverAddr.sin_port = htons(peerInfo.port);
             // change to local IP for local testing
-            inet_pton(AF_INET, "192.168.0.7", &serverAddr.sin_addr);
+            inet_pton(AF_INET, "192.168.0.42", &serverAddr.sin_addr);
 
             if (connect(sock, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
                 std::cerr << "Connection failed.\n";
@@ -269,7 +270,12 @@ bool Peer::sendMessage(int socket, unsigned char type, const std::vector<unsigne
     memcpy(buf.data() + 5, payload.data(), payload.size());
 
     ssize_t sent = send(socket, buf.data(), buf.size(), 0);
-    return sent == static_cast<ssize_t>(buf.size());
+    if (sent != static_cast<ssize_t>(buf.size())) {
+        // Connection closed, just return false instead of crashing
+        return false;
+    }
+
+    return true;
 }
 
 void Peer::handleMessage(int remoteID, const Message &msg) {
@@ -937,6 +943,14 @@ bool Peer::allPeersComplete() {
     }
 
     std::lock_guard<std::mutex> lock(neighborMutex);
+
+    // ✅ Check if we've heard from ALL peers (not just some)
+    int expectedPeers = peers.size() - 1;  // All except myself
+    if (neighborBitfields.size() < expectedPeers) {
+        return false;  // Haven't heard from everyone yet
+    }
+
+    // Now check if all known peers are complete
     for (auto& [peerID, bitfield] : neighborBitfields) {
         for (bool hasPiece : bitfield) {
             if (!hasPiece) {
